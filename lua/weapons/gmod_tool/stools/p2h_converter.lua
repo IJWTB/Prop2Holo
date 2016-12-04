@@ -10,7 +10,7 @@ AddCSLuaFile( "p2h/convert.lua" )
 TOOL.Name     = "E2 Hologram Converter"
 TOOL.Category = "Render"
 
-if WireLib then
+if ( WireLib ) then
     TOOL.Tab                  = "Wire"
     TOOL.Wire_MultiCategories = { "Tools" }
 end
@@ -25,23 +25,28 @@ TOOL.ClientConVar = {
 
 -------------------------------------------
 -- Client
-if CLIENT then
-    include( "weapons/gmod_tool/stools/p2h/convert.lua" )
-
+if ( CLIENT ) then
+    local draw = draw
+	
+	include( "weapons/gmod_tool/stools/p2h/convert.lua" )
+	
     language.Add( "Tool.p2h_converter.name", "E2 Hologram Converter" )
     language.Add( "Tool.p2h_converter.desc", "Converts props into holograms for use with expression2." )
     language.Add( "Tool.p2h_converter.0", "Click to select or deselect an entity. Hold USE to select entities within a radius. Hold SPRINT to restore the previous selection. Right click to finalize. Reload to clear selection." )
 
-    TOOL.LeftClick  = function() return true end
-    TOOL.RightClick = function() return true end
+    function TOOL:LeftClick()  return true end
+    function TOOL:RightClick() return true end
 
     local PANEL_TEXT_COLOR = Color( 0, 0, 0 )
+	local COLOR_DARK_GRAY = Color( 50, 50, 50, 255 )
+	local COLOR_MIDD_GRAY = Color( 125, 125, 125, 255 )
+	local COLOR_LITE_GRAY = Color( 175, 175, 175, 255 )
 
-    function TOOL.BuildCPanel( self )
+    function TOOL.BuildCPanel( cpanel )
         -- Base panel
-        self.Paint = function( pnl, w, h )
-            draw.RoundedBox( 0, 0, 0, w, 20, Color( 50, 50, 50, 255 ) )
-            draw.RoundedBox( 0, 1, 1, w - 2, 18, Color( 125, 125, 125, 255 ) )
+        function cpanel:Paint( w, h )
+            draw.RoundedBox( 0, 0, 0, w, 20, COLOR_DARK_GRAY )
+            draw.RoundedBox( 0, 1, 1, w - 2, 18, COLOR_LITE_GRAY )
         end
 
         -- Root category element
@@ -49,12 +54,12 @@ if CLIENT then
 
         root:SetLabel( "Options" )
         root:SetExpanded( 1 )
-        self:AddItem( root )
+        cpanel:AddItem( root )
 
-        root.Paint = function( pnl, w, h )
-            draw.RoundedBox( 0, 0, 0, w, h, Color( 50, 50, 50, 255 ) )
-            draw.RoundedBox( 0, 1, 1, w - 2, h - 2, Color( 175, 175, 175, 255 ) )
-            draw.RoundedBox( 0, 1, 1, w - 2, 18, Color( 125, 125, 125, 255 ) )
+        function root:Paint( w, h )
+            draw.RoundedBox( 0, 0, 0, w, h, COLOR_DARK_GRAY )
+            draw.RoundedBox( 0, 1, 1, w - 2, h - 2, COLOR_LITE_GRAY )
+            draw.RoundedBox( 0, 1, 1, w - 2, 18, COLOR_MIDD_GRAY )
         end
 
         -- List container
@@ -108,175 +113,188 @@ if CLIENT then
         ctrl:SetConVar( "p2h_converter_radius" )
         container:AddItem( ctrl )
     end
+	
+elseif ( SERVER ) then
 
-    return
-end
+	local math = math
+	local pairs = pairs
+	local IsValid = IsValid
+	
+	-------------------------------------------
+	-- Server
+	util.AddNetworkString( "p2h_converter" )
 
+	TOOL.Selection     = {}
+	TOOL.PrevSelection = {}
 
--------------------------------------------
--- Server
-util.AddNetworkString( "p2h_converter" )
+	local COLOR_NORM = Color( 0, 255, 0, 150 )
+	local COLOR_CLIP = Color( 0, 0, 255, 150 )
 
-TOOL.Selection     = {}
-TOOL.PrevSelection = {}
+	local MAX_ALPHA = 255
+	
+	-------------------------------------------
+	-- Checks if an entity belongs to a player
+	local function IsPropOwner( ply, ent )
+		if ( CPPI ) then return ent:CPPICanTool( ply, "prop2holo" ) end
 
-local col_Normal = Color( 0, 255, 0, 100 )
-local col_Clipped = Color( 0, 0, 255, 100 )
+		for k, v in pairs( g_SBoxObjects ) do
+			for b, j in pairs( v ) do
+				for _, e in pairs( j ) do
+					if ( e == ent and k == ply:UniqueID() ) then return true end
+				end
+			end
+		end
 
--------------------------------------------
--- Checks if an entity belongs to a player
-local function IsPropOwner( ply, ent )
-    if CPPI then return ent:CPPIGetOwner() == ply end
+		return false
+	end
 
-    for k, v in pairs( g_SBoxObjects ) do
-        for b, j in pairs( v ) do
-            for _, e in pairs( j ) do
-                if e == ent and k == ply:UniqueID() then return true end
-            end
-        end
-    end
+	-------------------------------------------
+	-- Checks if an entity is already selected
+	function TOOL:IsSelected( ent )
+		return self.Selection[ent]
+	end
 
-    return false
-end
+	-------------------------------------------
+	--  Adds an entity to selection
+	function TOOL:Select( ent )
+		if ( not self:IsSelected( ent ) ) then
+			local oldColor = ent:GetColor()
 
--------------------------------------------
--- Checks if an entity is already selected
-function TOOL:IsSelected( ent )
-    return self.Selection[ent] ~= nil
-end
+			ent:SetColor( ( ent.ClipData and tobool( self:GetClientNumber( "vclips" ) ) ) and COLOR_CLIP or COLOR_NORM )
+			ent:SetRenderMode( RENDERMODE_TRANSALPHA )
 
--------------------------------------------
---  Adds an entity to selection
-function TOOL:Select( ent )
-    if not self:IsSelected( ent ) then
-        local oldColor = ent:GetColor()
+			ent:CallOnRemove( "e2holo_convertor_onrmv", function( e )
+				self:Deselect( e )
+				self.Selection[e] = nil
+			end )
 
-        ent:SetColor( ( ent.ClipData and tobool( self:GetClientNumber( "vclips" ) ) ) and col_Clipped or col_Normal )
-        ent:SetRenderMode( RENDERMODE_TRANSALPHA )
+			self.Selection[ent] = oldColor
+		end
+	end
 
-        ent:CallOnRemove( "e2holo_convertor_onrmv", function( e )
-            self:Deselect( e )
-            self.Selection[e] = nil
-        end )
+	-------------------------------------------
+	-- Removes an entity from selection
+	function TOOL:Deselect( ent )
+		if ( self:IsSelected( ent ) ) then
+			local oldColor = self.Selection[ent]
 
-        self.Selection[ent] = oldColor
-    end
-end
+			ent:SetColor( oldColor )
+			ent:SetRenderMode( oldColor.a ~= MAX_ALPHA and RENDERMODE_TRANSALPHA or RENDERMODE_NORMAL )
 
--------------------------------------------
--- Removes an entity from selection
-function TOOL:Deselect( ent )
-    if self:IsSelected( ent ) then
-        local oldColor = self.Selection[ent]
+			self.Selection[ent] = nil
+		end
+	end
 
-        ent:SetColor( oldColor )
-        ent:SetRenderMode( oldColor.a ~= 255 and RENDERMODE_TRANSALPHA or RENDERMODE_NORMAL )
+	-------------------------------------------
+	-- Removes all entities from selection
+	function TOOL:Reload()
+		self.PrevSelection = {}
+		for ent, _ in pairs( self.Selection ) do
+			self.PrevSelection[ent] = self.Selection[ent]
+			self:Deselect( ent )
+		end
+		return true
+	end
 
-        self.Selection[ent] = nil
-    end
-end
+	-------------------------------------------
+	-- Left click ( selection )
+	function TOOL:LeftClick( tr )
 
--------------------------------------------
--- Removes all entities from selection
-function TOOL:Reload()
-    self.PrevSelection = {}
-    for ent, _ in pairs( self.Selection ) do
-        self.PrevSelection[ent] = self.Selection[ent]
-        self:Deselect( ent )
-    end
-    return true
-end
+		-- Filter out bad entities
+		local ply = self:GetOwner()
+		local ent = tr.Entity
 
--------------------------------------------
--- Left click ( selection )
-function TOOL:LeftClick( eye )
+		if ( not IsValid( ply ) ) then return false end
+		if ( ent:IsWorld() and ( not ply:KeyDown( IN_USE ) and not ply:KeyDown( IN_SPEED ) ) ) then return false end
 
-    -- Filter out bad entities
-    local user   = self:GetOwner()
-    local hitEnt = eye.Entity
+		if ( IsValid( ent ) ) then
+			if ( ent:IsPlayer() ) then return false end
+			if ( not IsPropOwner( ply, ent ) ) then return false end
+			if ( not util.IsValidPhysicsObject( ent, tr.PhysicsBone ) ) then return false end
+		end
 
-    if not IsValid( user ) then return false end
-    if hitEnt:IsWorld() and ( not user:KeyDown( IN_USE ) and not user:KeyDown( IN_SPEED ) ) then return false end
+		-- Select previous
+		if ( ply:KeyDown( IN_SPEED ) ) then
+			for ent, _ in pairs( self.PrevSelection ) do
+				self:Select( ent )
+			end
+			return true
+		end
 
-    if IsValid( hitEnt ) then
-        if hitEnt:IsPlayer() then return false end
-        if not IsPropOwner( user, hitEnt ) then return false end
-        if not util.IsValidPhysicsObject( hitEnt, eye.PhysicsBone ) then return false end
-    end
+		-- Area select
+		if ( ply:KeyDown( IN_USE ) ) then
+			local radius = math.Clamp( self:GetClientNumber( "radius" ), 64, 4096 )
 
-    -- Select previous
-    if user:KeyDown( IN_SPEED ) then
-        for ent, _ in pairs( self.PrevSelection ) do
-            self:Select( ent )
-        end
-        return true
-    end
+			for _, ent in pairs( ents.FindInSphere( tr.HitPos, radius ) ) do
+				if ( not IsValid( ent ) or not IsPropOwner( ply, ent ) ) then continue end
+				self:Select( ent )
+			end
 
-    -- Area select
-    if user:KeyDown( IN_USE ) then
-        local radius = math.Clamp( self:GetClientNumber( "radius" ), 64, 4096 )
+			return true
+		end
 
-        for _, ent in pairs( ents.FindInSphere( eye.HitPos, radius ) ) do
-            if not IsValid( ent ) or not IsPropOwner( user, ent ) then continue end
-            self:Select( ent )
-        end
+		-- Deselect entity if already selected
+		if ( self:IsSelected( ent ) ) then self:Deselect( ent ) return true end
 
-        return true
-    end
+		-- Otherwise add to selection
+		self:Select( ent )
 
-    -- Deselect entity if already selected
-    if self:IsSelected( hitEnt ) then self:Deselect( hitEnt ) return true end
+		return true
 
-    -- Otherwise add to selection
-    self:Select( hitEnt )
+	end
 
-    return true
+	-------------------------------------------
+	-- Right click ( finalize )
+	function TOOL:RightClick( tr )
 
-end
+		-- Filter out bad entities
+		local ply = self:GetOwner()
+		local ent = tr.Entity
 
--------------------------------------------
--- Right click ( finalize )
-function TOOL:RightClick( eye )
+		if ( ent:IsPlayer() ) then return false end
+		
+		-- Get the number of selected entities to send to the client
+		local numSelected = table.Count( self.Selection )
+		
+		if ( not IsValid( ent ) ) then
+			if ( numSelected == 0 ) then return false end
+			
+			-- Grab an entity from the selection list as use it as the base
+			for otherEnt, _ in pairs( self.Selection ) do
+				ent = otherEnt
+				break
+			end
+		end
+		
+		-- Remove base entity from selection
+		self.PrevSelection = {}
+		self.PrevSelection[ent] = self.Selection[ent]
+		self:Deselect( ent )
 
-    -- Filter out bad entities
-    local user   = self:GetOwner()
-    local hitEnt = eye.Entity
+		net.Start( "p2h_converter" )
+			-- Base entity
+			net.WriteEntity( ent )
 
-    if not IsValid( user ) or not IsValid( hitEnt ) or hitEnt:IsWorld() then
-        return false
-    end
+			-- Entity list
+			if ( numSelected >= 1 ) then
+				-- Send the number of entities to read, minus 1 to account for the base
+				net.WriteUInt( numSelected - 1, 16 )
+				
+				-- Write out every entity to the client
+				for ent, _ in pairs( self.Selection ) do
+					net.WriteEntity( ent )
+					self.PrevSelection[ent] = self.Selection[ent]
+					self:Deselect( ent )
+				end
+			end
+		net.Send( ply )
 
-    if hitEnt:IsPlayer() then return false end
-    if not IsPropOwner( user, hitEnt ) then return false end
-    if not util.IsValidPhysicsObject( hitEnt, eye.PhysicsBone ) then return false end
+		-- Clear selection
+		self.Selection = {}
 
-    -- Remove base entity from selection
-    self.PrevSelection = {}
-    self.PrevSelection[hitEnt] = self.Selection[hitEnt]
-    self:Deselect( hitEnt )
+		-- No serverside tool sounds
+		return true
 
-    -- Send entity list to client
-    local selectionCount = table.Count( self.Selection )
-
-    net.Start( "p2h_converter" )
-        -- Base entity
-        net.WriteUInt( hitEnt:EntIndex(), 16 )
-
-        -- Entity list
-        if selectionCount >= 1 then
-            net.WriteUInt( selectionCount, 16 )
-            for ent, _ in pairs( self.Selection ) do
-                net.WriteUInt( ent:EntIndex(), 16 )
-                self.PrevSelection[ent] = self.Selection[ent]
-                self:Deselect( ent )
-            end
-        end
-    net.Send( user )
-
-    -- Clear selection
-    self.Selection = {}
-
-    -- No serverside tool sounds
-    return true
-
+	end
+	
 end
