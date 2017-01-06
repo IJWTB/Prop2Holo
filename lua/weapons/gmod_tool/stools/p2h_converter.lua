@@ -144,6 +144,7 @@ if ( SERVER ) then
 		-- Shift + LMB -> Re-select the previous selection
 		if ( ply:KeyDown( IN_USE ) or ply:KeyDown( IN_SPEED ) ) then
 			for ent, _ in pairs( self.PrevSelection ) do
+				if ( not IsValid( ent ) ) then continue end
 				self:Select( ent )
 			end
 			return true
